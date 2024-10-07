@@ -1,4 +1,5 @@
 import ayla_iot_unofficial, datetime, time
+import logging
 
 from .const import (
     APP_ID,
@@ -7,22 +8,56 @@ from .const import (
     SALT_TENTHS_MAX
 )
 
+# Setup the logger
+_LOGGER = logging.getLogger(__name__)
+
 class EcowaterDevice(ayla_iot_unofficial.device.Device):
-    def update(self, property_list = None):
-        data = super(EcowaterDevice, self).update(property_list)
-        
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._last_api_call_successful = None  # Store date and time from the last successful connection to API
+
+    def update(self, property_list=None):
+        try:
+            data = super(EcowaterDevice, self).update(property_list)
+            # If API call was successful, we update time and date from the last successful connection
+            self._last_api_call_successful = datetime.datetime.now(datetime.timezone.utc)
+            _LOGGER.info("Successful API connection. Last successful call was registered.")
+        except Exception as e:
+            # If API call was failed, we kept the last successful connection date and time and we register the error
+            _LOGGER.error(f"Error calling to API: {e}")
+            return None
+
         # If data hasn't been updated in the last 5 mins then tell the device to update the data and wait 30 secs for the device to update the data
-        last_updated = datetime.datetime.strptime(self.properties_full["gallons_used_today"]["data_updated_at"], "%Y-%m-%dT%H:%M:%SZ")
+        last_updated = datetime.datetime.strptime(
+            self.properties_full["gallons_used_today"]["data_updated_at"], "%Y-%m-%dT%H:%M:%SZ"
+        )
         last_updated = last_updated.replace(tzinfo=datetime.timezone.utc)
         current_time = datetime.datetime.now(datetime.timezone.utc)
         five_minutes_ago = current_time - datetime.timedelta(minutes=5)
 
         if last_updated < five_minutes_ago:
-            self.ayla_api.self_request('post', self.set_property_endpoint(UPDATE_PROPERTY), json={'datapoint': {'value': 1}})
+            self.ayla_api.self_request(
+                'post', self.set_property_endpoint(UPDATE_PROPERTY), json={'datapoint': {'value': 1}}
+            )
+            _LOGGER.info("Asking for data device update.")
             time.sleep(30)
             data = super(EcowaterDevice, self).update(property_list)
-        
+
         return data
+
+    # API Info
+    @property
+    def last_api_call_successful(self) -> datetime.datetime:
+        """It returns the date and time from the last successful connection to API or None if never there was a successful connection."""
+        return self._last_api_call_successful
+
+    @property
+    def status(self) -> str:
+        """It returns 'online' if last call to API was successful, 'offline' if not."""
+        if self._last_api_call_successful:
+            return "online"
+        else:
+            return "offline"
 
     # Device Info
     @property
